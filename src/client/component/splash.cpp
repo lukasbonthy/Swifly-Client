@@ -1,2 +1,6 @@
-// Swifly splash source placeholder.
-// Direct launcher source updates are handled locally.
+#include <std_include.hpp>
+
+namespace splash {
+void hide() {
+}
+}
