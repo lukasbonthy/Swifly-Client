@@ -26,12 +26,12 @@ void draw_branding() {
     return;
 
   game::render::R_AddCmdDrawText(
-      "EZZ: " VERSION, std::numeric_limits<int>::max(), font, x,
+      "Swifly: " VERSION, std::numeric_limits<int>::max(), font, x,
       y + static_cast<float>(font[2]) * scale, scale, scale, 0.0f, &color,
       game::itemTextStyle::NORMAL);
 }
 
-const char *get_ingame_console_prefix_stub() { return "EZZ> "; }
+const char *get_ingame_console_prefix_stub() { return "Swifly> "; }
 } // namespace
 
 struct component final : client_component {
@@ -41,7 +41,7 @@ struct component final : client_component {
       scheduler::loop(draw_branding, scheduler::renderer);
 
       // Change window title prefix
-      utils::hook::copy_string(0x14303F3D8_g, "EZZ");
+      utils::hook::copy_string(0x14303F3D8_g, "Swifly");
 
       // Change ingame console prefix
       utils::hook::call(0x141339970_g, get_ingame_console_prefix_stub);
