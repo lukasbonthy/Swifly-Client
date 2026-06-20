@@ -10,6 +10,7 @@
 #include <utils/concurrency.hpp>
 #include <utils/hook.hpp>
 #include <utils/io.hpp>
+#include <utils/http.hpp>
 
 #include "network.hpp"
 #include "scheduler.hpp"
@@ -19,112 +20,58 @@ namespace server_list {
 namespace {
 utils::hook::detour lua_server_info_to_table_hook;
 
-struct master_query {
-  game::net::netadr_t address{};
-  bool responded{false};
-  std::unordered_set<game::net::netadr_t> results{};
-};
-
-struct state {
-  std::vector<master_query> masters{};
-  bool requesting{false};
-  std::chrono::high_resolution_clock::time_point query_start{};
-  callback callback{};
-};
-
-utils::concurrency::container<state> master_state;
+constexpr auto swifly_server_list_url = "https://client.swifly.net/servers.json";
 
 utils::concurrency::container<server_list> favorite_servers{};
 utils::concurrency::container<std::vector<game::net::netadr_t>>
     recent_servers{};
 
+void add_server_from_string(std::unordered_set<game::net::netadr_t> &servers,
+                            const std::string &address) {
+  if (address.empty()) {
+    return;
+  }
+
+  const auto addr = network::address_from_string(address);
+  if (addr.type != game::net::NA_BAD) {
+    servers.emplace(addr);
+  }
+}
+
 std::unordered_set<game::net::netadr_t>
-parse_server_list_data(const network::data_view &data) {
-  std::unordered_set<game::net::netadr_t> result{};
+parse_http_server_list(const std::string &json) {
+  std::unordered_set<game::net::netadr_t> servers{};
 
-  std::optional<size_t> start{};
-  for (size_t i = 0; i + 6 < data.size(); ++i) {
-    if (data[i + 6] == '\\') {
-      start.emplace(i);
-      break;
+  rapidjson::Document doc{};
+  doc.Parse(json.data(), json.size());
+
+  if (doc.IsArray()) {
+    for (const auto &entry : doc.GetArray()) {
+      if (entry.IsString()) {
+        add_server_from_string(
+            servers, std::string(entry.GetString(), entry.GetStringLength()));
+      }
+    }
+    return servers;
+  }
+
+  if (doc.IsObject() && doc.HasMember("servers") && doc["servers"].IsArray()) {
+    for (const auto &entry : doc["servers"].GetArray()) {
+      if (entry.IsString()) {
+        add_server_from_string(
+            servers, std::string(entry.GetString(), entry.GetStringLength()));
+      }
     }
   }
 
-  if (!start.has_value()) {
-    return result;
-  }
-
-  for (auto i = start.value(); i + 6 < data.size(); i += 7) {
-    if (data[i + 6] != '\\') {
-      break;
-    }
-
-    game::net::netadr_t address{};
-    address.type = game::net::NA_RAWIP;
-    address.localNetID = game::net::NS_CLIENT1;
-    memcpy(&address.ipv4.a, data.data() + i + 0, 4);
-    memcpy(&address.port, data.data() + i + 4, 2);
-    address.port = ntohs(address.port);
-
-    result.emplace(address);
-  }
-
-  return result;
+  return servers;
 }
 
-bool all_masters_done(const state &s) {
-  for (const auto &m : s.masters) {
-    if (!m.responded) {
-      return false;
-    }
-  }
-  return true;
-}
-
-void finalize_master_query(state &s) {
-  s.requesting = false;
-  auto cb = std::move(s.callback);
-
-  std::unordered_set<game::net::netadr_t> merged{};
-  bool any_success = false;
-
-  for (const auto &m : s.masters) {
-    if (!m.results.empty()) {
-      any_success = true;
-    }
-    for (const auto &addr : m.results) {
-      merged.insert(addr);
-    }
-  }
-
-  s.masters.clear();
-  cb(any_success, merged);
-}
-
-void handle_server_list_response(const game::net::netadr_t &target,
-                                 const network::data_view &data, state &s) {
-  if (!s.requesting) {
-    return;
-  }
-
-  master_query *matched = nullptr;
-  for (auto &m : s.masters) {
-    if (!m.responded && m.address == target) {
-      matched = &m;
-      break;
-    }
-  }
-
-  if (!matched) {
-    return;
-  }
-
-  matched->responded = true;
-  matched->results = parse_server_list_data(data);
-
-  if (all_masters_done(s)) {
-    finalize_master_query(s);
-  }
+std::string get_cache_buster() {
+  return "?" +
+         std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count());
 }
 
 void lua_server_info_to_table_stub(game::ui::lua::hks::lua_State *state,
@@ -185,9 +132,10 @@ void read_favorite_servers() {
         if (utils::io::read_file(path, &data)) {
           const auto srv = utils::string::split(data, '\n');
           for (const auto &server_address : srv) {
-            game::net::netadr_t server =
-                network::address_from_string(server_address);
-            servers.insert(server);
+            const auto server = network::address_from_string(server_address);
+            if (server.type != game::net::NA_BAD) {
+              servers.insert(server);
+            }
           }
         }
       });
@@ -223,8 +171,7 @@ void read_recent_servers() {
           continue;
         }
 
-        game::net::netadr_t server =
-            network::address_from_string(server_address);
+        const auto server = network::address_from_string(server_address);
         if (server.type == game::net::NA_BAD) {
           continue;
         }
@@ -236,10 +183,6 @@ void read_recent_servers() {
       }
     }
   });
-}
-
-std::string get_master_servers_file_path() {
-  return "boiii_players/user/master_servers.txt";
 }
 
 std::string get_lan_servers_file_path() {
@@ -266,7 +209,7 @@ void add_lan_server_from_string(const std::string &in) {
     return;
   }
 
-  const game::net::netadr_t addr = network::address_from_string(normalized);
+  const auto addr = network::address_from_string(normalized);
   if (addr.type == game::net::NA_BAD) {
     return;
   }
@@ -303,74 +246,22 @@ void add_lan_server_from_string(const std::string &in) {
 }
 } // namespace
 
-static std::vector<std::string> master_server_hosts{"master.ezz.lol:20810",
-                                                    "m.ezz.lol:20810"};
-
-inline void parse_master_server_hosts() {
-  std::string data;
-  if (utils::io::file_exists(get_master_servers_file_path()) &&
-      utils::io::read_file(get_master_servers_file_path(), &data)) {
-    const auto lines = utils::string::split(data, '\n');
-    bool read_first = false;
-    for (const auto &line : lines) {
-      const auto l = normalize_lan_input(line);
-      if (!l.empty()) {
-        if (!read_first) {
-          master_server_hosts.clear();
-          read_first = true;
-        }
-        master_server_hosts.emplace_back(l);
-      }
-    }
-  } else {
-    // Write defaults
-    std::string write;
-    for (const auto &host : master_server_hosts) {
-      write.append(host);
-      write.push_back('\n');
-    }
-    utils::io::write_file(get_master_servers_file_path(), write);
-  }
-}
-
-static std::atomic_bool parsed_master_servers{false};
 std::vector<game::net::netadr_t> get_master_servers() {
-
-  if (!parsed_master_servers.exchange(true)) {
-    parse_master_server_hosts();
-  }
-
-  std::vector<game::net::netadr_t> servers;
-  for (const auto &host : master_server_hosts) {
-    game::net::netadr_t addr = network::address_from_string(host.c_str());
-    if (addr.type != game::net::NA_BAD) {
-      servers.push_back(addr);
-    }
-  }
-  return servers;
+  return {network::address_from_string("client.swifly.net:20810")};
 }
 
 void request_servers(callback callback) {
-  master_state.access([&callback](state &s) {
-    auto masters = get_master_servers();
-    if (masters.empty()) {
-      return;
+  std::thread([cb = std::move(callback)]() mutable {
+    std::unordered_set<game::net::netadr_t> servers{};
+
+    const auto json =
+        utils::http::get_data(swifly_server_list_url + get_cache_buster());
+    if (json) {
+      servers = parse_http_server_list(*json);
     }
 
-    s.requesting = true;
-    s.masters.clear();
-    s.callback = std::move(callback);
-    s.query_start = std::chrono::high_resolution_clock::now();
-
-    for (const game::net::netadr_t &addr : masters) {
-      master_query mq{};
-      mq.address = addr;
-      s.masters.push_back(mq);
-
-      network::send(addr, "getservers",
-                    utils::string::va("T7 %i full empty", PROTOCOL));
-    }
-  });
+    cb(!servers.empty(), servers);
+  }).detach();
 }
 
 void add_favorite_server(game::net::netadr_t addr) {
@@ -435,36 +326,6 @@ utils::concurrency::container<recent_list> &get_recent_servers() {
 
 struct component final : client_component {
   void post_unpack() override {
-
-    network::on("getServersResponse", [](const game::net::netadr_t &target,
-                                         const network::data_view &data,
-                                         game::LocalClientNum_t clientNum) {
-      master_state.access(
-          [&](state &s) { handle_server_list_response(target, data, s); });
-    });
-
-    scheduler::loop(
-        [] {
-          master_state.access([](state &s) {
-            if (!s.requesting) {
-              return;
-            }
-
-            const auto now = std::chrono::high_resolution_clock::now();
-            if ((now - s.query_start) < 2s) {
-              return;
-            }
-
-            // Timeout: mark all non-responded masters as done
-            for (auto &m : s.masters) {
-              m.responded = true;
-            }
-
-            finalize_master_query(s);
-          });
-        },
-        scheduler::async, 200ms);
-
     lua_server_info_to_table_hook.create(0x141F1FD10_g,
                                          lua_server_info_to_table_stub);
 
@@ -487,13 +348,7 @@ struct component final : client_component {
     });
   }
 
-  void pre_destroy() override {
-    master_state.access([](state &s) {
-      s.requesting = false;
-      s.masters.clear();
-      s.callback = {};
-    });
-  }
+  void pre_destroy() override {}
 };
 } // namespace server_list
 
