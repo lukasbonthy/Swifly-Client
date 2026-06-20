@@ -1,0 +1,14 @@
+{
+  "name": "swifly-server-list",
+  "version": "1.0.0",
+  "description": "Swifly master server list for the in-game server browser.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
