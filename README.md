@@ -48,7 +48,7 @@ Releases for Swifly Client should be published from this repository when builds 
 Example:
 
 ```bat
-boiii.exe -console -nointro
+swifly.exe -console -nointro
 ```
 
 ---
@@ -63,7 +63,7 @@ For a basic server:
 4. Launch with:
 
 ```bat
-boiii.exe -dedicated
+swifly.exe -dedicated
 ```
 
 Default server port is usually `27017` unless changed.
@@ -93,5 +93,6 @@ Visible labels should use:
 - `Swifly Client`
 - `Swifly Updater`
 - `Swifly>` for console prefix text
+- `swifly.exe` for the built launcher executable
 
-Avoid using old Ezz branding in this fork.
+Avoid using old BOIII/Ezz branding in visible Swifly surfaces.
