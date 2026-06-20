@@ -31,6 +31,15 @@ void draw_branding() {
       game::itemTextStyle::NORMAL);
 }
 
+void rename_console_window() {
+  const auto hwnd = FindWindowA("BOIII WinConsole", nullptr);
+  if (!hwnd) {
+    return;
+  }
+
+  SetWindowTextA(hwnd, game::is_server() ? "Swifly Server" : "Swifly Console");
+}
+
 const char *get_ingame_console_prefix_stub() { return "Swifly> "; }
 } // namespace
 
@@ -39,6 +48,7 @@ struct component final : client_component {
     if (!utils::flags::has_flag("nobranding")) {
 
       scheduler::loop(draw_branding, scheduler::renderer);
+      scheduler::loop(rename_console_window, scheduler::main, 1s);
 
       // Change window title prefix
       utils::hook::copy_string(0x14303F3D8_g, "Swifly");
