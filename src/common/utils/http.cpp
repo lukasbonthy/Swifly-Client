@@ -21,6 +21,19 @@ struct stream_helper {
   std::exception_ptr exception{};
 };
 
+std::string rewrite_swifly_update_url(const std::string &url) {
+  constexpr std::string_view old_update_host = "https://r2.ezz.lol/";
+  constexpr std::string_view swifly_update_host = "https://client.swifly.net/";
+
+  if (url.rfind(old_update_host, 0) != 0) {
+    return url;
+  }
+
+  std::string rewritten{swifly_update_host};
+  rewritten.append(url.substr(old_update_host.size()));
+  return rewritten;
+}
+
 int progress_callback(void *clientp, const curl_off_t /*dltotal*/,
                       const curl_off_t dlnow, const curl_off_t /*ultotal*/,
                       const curl_off_t /*ulnow*/) {
@@ -107,6 +120,7 @@ std::optional<std::string> get_data(const std::string &url,
   std::string buffer{};
   progress_helper helper{};
   helper.callback = &callback;
+  const auto request_url = rewrite_swifly_update_url(url);
 
   // Add Accept header for binary data to prevent CDN content modification
   header_list =
@@ -114,7 +128,7 @@ std::optional<std::string> get_data(const std::string &url,
 
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
-  curl_easy_setopt(curl, CURLOPT_URL, url.data());
+  curl_easy_setopt(curl, CURLOPT_URL, request_url.data());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
   curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
@@ -140,7 +154,8 @@ std::optional<std::string> get_data(const std::string &url,
       }
 
       throw std::runtime_error("Bad status code " + std::to_string(http_code) +
-                               " met while trying to download file " + url);
+                               " met while trying to download file " +
+                               request_url);
     }
 
     if (helper.exception) {
@@ -174,8 +189,9 @@ std::optional<std::string> post_data(const std::string &url,
   });
 
   std::string buffer{};
+  const auto request_url = rewrite_swifly_update_url(url);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(curl, CURLOPT_URL, url.data());
+  curl_easy_setopt(curl, CURLOPT_URL, request_url.data());
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body.data());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
@@ -222,9 +238,10 @@ int get_data_stream(const std::string &url, const headers &headers,
     curl_easy_cleanup(curl);
   });
 
+  const auto request_url = rewrite_swifly_update_url(url);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
-  curl_easy_setopt(curl, CURLOPT_URL, url.data());
+  curl_easy_setopt(curl, CURLOPT_URL, request_url.data());
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "ezz-updater/1.0");
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
