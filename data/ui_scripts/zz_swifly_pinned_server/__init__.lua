@@ -2,9 +2,8 @@ if Engine.GetCurrentMap() ~= "core_frontend" then
   return
 end
 
--- Keeps Lukas's Swifly server at the top of the server browser.
--- This is a small wrapper around the existing server-browser datasource so it
--- does not have to rewrite the whole browser script.
+-- Keeps Lukas's Swifly server visually pinned at row 1 in the server browser,
+-- even after ping/name/player sorting and normal filter refreshes.
 
 local PINNED_SERVER_ADDR = "mp1.swifly.net:1154"
 local PINNED_SERVER_PORT = ":1154"
@@ -35,13 +34,12 @@ local function isPinnedServerInfo(info)
     return true
   end
 
-  -- BO3 may display the resolved IP instead of mp1.swifly.net, so also match
-  -- the unique Swifly game port.
+  -- BO3 may resolve mp1.swifly.net to an IP internally, so also match the
+  -- unique Swifly connect port.
   if stringEndsWith(addr, PINNED_SERVER_PORT) then
     return true
   end
 
-  -- Fallback if the server name contains Swifly.
   if string.find(name, PINNED_SERVER_NAME, 1, true) then
     return true
   end
@@ -89,12 +87,70 @@ local function modelIsPinned(model)
   return false
 end
 
+local function setModelValue(parent, key, value)
+  local model = Engine.CreateModel(parent, key)
+  if model then
+    Engine.SetModelValue(model, value)
+  end
+end
+
+local function writeServerInfoToVisualRow(controller, list, serverInfo, rawIndex, displayOffset)
+  if not list or not list.servers or not list.numElementsInList or not serverInfo then
+    return nil
+  end
+
+  local elementIndex = (displayOffset or 0) % list.numElementsInList + 1
+  if not list.servers[elementIndex] or not list.servers[elementIndex].model then
+    return nil
+  end
+
+  local serverModel = list.servers[elementIndex].model
+  setModelValue(serverModel, "serverIndex", serverInfo.serverIndex or rawIndex or 0)
+  setModelValue(serverModel, "connectAddr", serverInfo.connectAddr or "")
+  setModelValue(serverModel, "ping", serverInfo.ping or 0)
+  setModelValue(serverModel, "modName", serverInfo.modName or "")
+  setModelValue(serverModel, "mapName", serverInfo.map or "")
+  setModelValue(serverModel, "desc", serverInfo.desc or "")
+
+  local clientCount = (serverInfo.playerCount or 0) - (serverInfo.botCount or 0)
+  setModelValue(serverModel, "clientCount", clientCount)
+  setModelValue(serverModel, "maxClients", serverInfo.maxPlayers or 0)
+  setModelValue(serverModel, "passwordProtected", serverInfo.password or false)
+  setModelValue(serverModel, "secure", serverInfo.secure or false)
+  setModelValue(serverModel, "name", serverInfo.name or "")
+  setModelValue(serverModel, "gameType", serverInfo.gametype or "")
+  setModelValue(serverModel, "dedicated", serverInfo.dedicated or false)
+  setModelValue(serverModel, "ranked", serverInfo.ranked or false)
+  setModelValue(serverModel, "hardcore", serverInfo.hardcore or false)
+  setModelValue(serverModel, "zombies", serverInfo.zombies or false)
+  setModelValue(serverModel, "campaign", serverInfo.campaign or 0)
+  setModelValue(serverModel, "botCount", serverInfo.botCount or 0)
+  setModelValue(serverModel, "rounds", serverInfo.rounds or 0)
+
+  return serverModel
+end
+
+local function getPinnedVisualModel(controller, list)
+  local pinnedIndex = findPinnedRawIndex()
+  if not pinnedIndex then
+    return nil
+  end
+
+  local info = game.getrawserverinfo(pinnedIndex)
+  if not isPinnedServerInfo(info) then
+    return nil
+  end
+
+  list.__swiflyPinnedRawIndex = pinnedIndex
+  return writeServerInfoToVisualRow(controller, list, info, pinnedIndex, 0)
+end
+
 local function patchLobbyServerDataSource()
   if not DataSources or not DataSources.LobbyServer then
     return false
   end
 
-  if DataSources.LobbyServer.__swiflyPinnedPatch then
+  if DataSources.LobbyServer.__swiflyPinnedPatchV2 then
     return true
   end
 
@@ -105,11 +161,13 @@ local function patchLobbyServerDataSource()
     return false
   end
 
-  DataSources.LobbyServer.__swiflyPinnedPatch = true
+  DataSources.LobbyServer.__swiflyPinnedPatchV2 = true
 
   DataSources.LobbyServer.prepare = function(controller, list, filter)
     local result = originalPrepare(controller, list, filter)
-    list.__swiflyPinnedRawIndex = findPinnedRawIndex()
+    if list then
+      list.__swiflyPinnedRawIndex = findPinnedRawIndex()
+    end
     return result
   end
 
@@ -118,39 +176,33 @@ local function patchLobbyServerDataSource()
       return originalGetItem(controller, list, index)
     end
 
-    local pinnedIndex = list.__swiflyPinnedRawIndex or findPinnedRawIndex()
-    list.__swiflyPinnedRawIndex = pinnedIndex
+    -- Row 1 is always written from game.getrawserverinfo(), not from the engine
+    -- sorted row. This is what keeps it pinned after Ping sort.
+    if index == 1 then
+      local pinnedModel = getPinnedVisualModel(controller, list)
+      if pinnedModel then
+        return pinnedModel
+      end
+      return originalGetItem(controller, list, index)
+    end
 
-    -- Always render the pinned server in visual row 1 when it exists.
-    if index == 1 and pinnedIndex and list.updateModels then
-      local ok, model = pcall(function()
-        return list.updateModels(controller, list, pinnedIndex, 0)
-      end)
-      if ok and model then
+    -- Avoid showing the pinned server twice if the normal sorted list would also
+    -- place it in a later row.
+    local searchIndex = index
+    for _ = 1, 8 do
+      local model = originalGetItem(controller, list, searchIndex)
+      if not modelIsPinned(model) then
         return model
       end
+      searchIndex = searchIndex + 1
     end
 
-    -- If the normal row would duplicate the pinned server, skip one row ahead.
-    local model = originalGetItem(controller, list, index)
-    if index > 1 and modelIsPinned(model) then
-      local ok, replacement = pcall(function()
-        return originalGetItem(controller, list, index + 1)
-      end)
-      if ok and replacement then
-        return replacement
-      end
-    end
-
-    return model
+    return nil
   end
 
   return true
 end
 
--- Most of the time server_browser loads before this because this folder starts
--- with zz. If load order ever flips, retry when the menu asks if the browser is
--- enabled.
 local patched = patchLobbyServerDataSource()
 local oldIsServerBrowserEnabled = IsServerBrowserEnabled
 
