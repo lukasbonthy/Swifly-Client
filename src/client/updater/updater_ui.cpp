@@ -17,7 +17,7 @@ void updater_ui::update_files(const std::vector<file_info> &files) {
   this->downloading_files_.clear();
 
   this->progress_ui_ = {game::is_headless()};
-  this->progress_ui_.set_title("BOIII Updater");
+  this->progress_ui_.set_title("Swifly Updater");
   this->progress_ui_.show(false);
 
   // Is it good to add artificial sleeps?
