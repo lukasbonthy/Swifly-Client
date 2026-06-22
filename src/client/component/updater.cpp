@@ -10,7 +10,7 @@
 namespace updater {
 namespace {
 constexpr auto SERVER_BROWSER_LUA_URL =
-    "https://client.swifly.net/boiii/data/ui_scripts/server_browser/__init__.lua";
+    "https://swifly-servers.onrender.com/boiii/data/ui_scripts/server_browser/__init__.lua";
 
 void remove_folder_if_exists(const std::filesystem::path &path,
                              const std::string &label) {
@@ -127,9 +127,9 @@ void update() {
     // Hard reset the cached updater data first.
     hard_reset_download_cache(appdata_path);
 
-    // Directly pull the server browser Lua from client.swifly.net before the
-    // generic updater runs. This makes the target file exist even if the normal
-    // manifest path is stale or skipped.
+    // Directly pull the server browser Lua from swifly-servers.onrender.com
+    // before the generic updater runs. This makes the target file exist even if
+    // the normal manifest path is stale or skipped.
     force_download_server_browser_lua(appdata_path);
 
     // Run the normal updater for the rest of the data files.
@@ -138,8 +138,9 @@ void update() {
     // Mirror all freshly downloaded updater data into the actual BO3 folder.
     mirror_downloaded_data_to_game_folder(appdata_path);
 
-    // Overwrite the server browser Lua one final time from client.swifly.net so
-    // this exact hosted Lua wins after any manifest/update/mirror behavior.
+    // Overwrite the server browser Lua one final time from
+    // swifly-servers.onrender.com so this exact hosted Lua wins after any
+    // manifest/update/mirror behavior.
     force_download_server_browser_lua(appdata_path);
   } catch (update_cancelled &) {
     TerminateProcess(GetCurrentProcess(), 0);
