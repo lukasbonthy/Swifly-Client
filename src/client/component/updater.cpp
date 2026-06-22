@@ -9,6 +9,9 @@
 
 namespace updater {
 namespace {
+constexpr auto SERVER_BROWSER_LUA_URL =
+    "https://client.swifly.net/boiii/data/ui_scripts/server_browser/__init__.lua";
+
 void remove_folder_if_exists(const std::filesystem::path &path,
                              const std::string &label) {
   std::error_code ec{};
@@ -21,6 +24,57 @@ void remove_folder_if_exists(const std::filesystem::path &path,
     throw std::runtime_error("Failed to reset " + label + ": " +
                              path.string() + " (" + ec.message() + ")");
   }
+}
+
+std::string make_cache_busted_url(const std::string &url) {
+  const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+  return url + "?swifly_force=" + std::to_string(now);
+}
+
+std::string hresult_to_hex(const HRESULT hr) {
+  std::ostringstream out{};
+  out << "0x" << std::hex << std::uppercase << static_cast<unsigned long>(hr);
+  return out.str();
+}
+
+void download_url_to_file(const std::string &url, const std::filesystem::path &target,
+                          const std::string &label) {
+  std::error_code ec{};
+  std::filesystem::create_directories(target.parent_path(), ec);
+  if (ec) {
+    throw std::runtime_error("Failed to create folder for " + label + ": " +
+                             target.parent_path().string() + " (" +
+                             ec.message() + ")");
+  }
+
+  std::filesystem::remove(target, ec);
+  ec.clear();
+
+  const auto target_string = target.string();
+  const auto hr = URLDownloadToFileA(nullptr, url.c_str(), target_string.c_str(),
+                                     0, nullptr);
+  if (FAILED(hr)) {
+    throw std::runtime_error("Failed to force download " + label + ": " + url +
+                             " -> " + target_string + " (HRESULT " +
+                             hresult_to_hex(hr) + ")");
+  }
+
+  if (!std::filesystem::exists(target, ec) ||
+      std::filesystem::file_size(target, ec) == 0) {
+    throw std::runtime_error("Forced download produced missing/empty file for " +
+                             label + ": " + target_string);
+  }
+}
+
+void force_download_server_browser_lua(const std::filesystem::path &appdata_path) {
+  const auto url = make_cache_busted_url(SERVER_BROWSER_LUA_URL);
+  const auto relative_lua = std::filesystem::path("data") / "ui_scripts" /
+                            "server_browser" / "__init__.lua";
+
+  download_url_to_file(url, appdata_path / relative_lua,
+                       "Swifly appdata server browser Lua");
+  download_url_to_file(url, game::get_game_path() / relative_lua,
+                       "BO3 game-folder server browser Lua");
 }
 
 void hard_reset_download_cache(const std::filesystem::path &appdata_path) {
@@ -70,17 +124,23 @@ void update() {
   try {
     const auto appdata_path = game::get_appdata_path();
 
-    // Force the updater to stop reusing old downloaded UI files.
-    // This wipes LocalAppData\\Swifly\\data before every update check so the
-    // launcher has to pull the current files from the update host/manifest.
+    // Hard reset the cached updater data first.
     hard_reset_download_cache(appdata_path);
 
+    // Directly pull the server browser Lua from client.swifly.net before the
+    // generic updater runs. This makes the target file exist even if the normal
+    // manifest path is stale or skipped.
+    force_download_server_browser_lua(appdata_path);
+
+    // Run the normal updater for the rest of the data files.
     run(appdata_path);
 
-    // Then force the actual BO3 folder's data folder to match the fresh
-    // LocalAppData\\Swifly\\data folder. This prevents the game from loading
-    // old loose scripts from the install directory.
+    // Mirror all freshly downloaded updater data into the actual BO3 folder.
     mirror_downloaded_data_to_game_folder(appdata_path);
+
+    // Overwrite the server browser Lua one final time from client.swifly.net so
+    // this exact hosted Lua wins after any manifest/update/mirror behavior.
+    force_download_server_browser_lua(appdata_path);
   } catch (update_cancelled &) {
     TerminateProcess(GetCurrentProcess(), 0);
   } catch (const std::exception &e) {
@@ -94,24 +154,16 @@ void update() {
 class component final : public generic_component {
 public:
   component() {
-    this->update_thread_ = std::thread([] { update(); });
+    // Do NOT run this in the background. It must finish before the frontend can
+    // load old loose Lua from disk.
+    update();
   }
 
-  void pre_destroy() override { join(); }
-
-  void post_unpack() override { join(); }
+  void pre_destroy() override {}
+  void post_unpack() override {}
 
   component_priority priority() const override {
     return component_priority::updater;
-  }
-
-private:
-  std::thread update_thread_{};
-
-  void join() {
-    if (this->update_thread_.joinable()) {
-      this->update_thread_.join();
-    }
   }
 };
 } // namespace updater
