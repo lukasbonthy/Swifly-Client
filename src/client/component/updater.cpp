@@ -8,13 +8,37 @@
 #include <updater/updater.hpp>
 
 namespace updater {
+namespace {
+void hard_reset_data_folder(const std::filesystem::path &appdata_path) {
+  const auto data_path = appdata_path / "data";
+
+  std::error_code ec{};
+  if (!std::filesystem::exists(data_path, ec)) {
+    return;
+  }
+
+  std::filesystem::remove_all(data_path, ec);
+  if (ec) {
+    throw std::runtime_error("Failed to reset updater data folder: " +
+                             data_path.string() + " (" + ec.message() + ")");
+  }
+}
+} // namespace
+
 void update() {
   if (utils::flags::has_flag("noupdate")) {
     return;
   }
 
   try {
-    run(game::get_appdata_path());
+    const auto appdata_path = game::get_appdata_path();
+
+    // Force the updater to stop reusing old downloaded UI files.
+    // This wipes LocalAppData\\Swifly\\data before every update check so the
+    // launcher has to pull the current files from the update host/manifest.
+    hard_reset_data_folder(appdata_path);
+
+    run(appdata_path);
   } catch (update_cancelled &) {
     TerminateProcess(GetCurrentProcess(), 0);
   } catch (const std::exception &e) {
